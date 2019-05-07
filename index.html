@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlaatWorld</title>
+<style>body{margin:0}#canvas{display:block}input,button{position:absolute}</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<input id="name-input" type="text" value="Anonymous" style="top:2px;right:2px">
+<input id="chat-input" type="text" placeholder="Chat..." style="bottom:2px;left:2px;width:25%">
+<button id="music-button" style="bottom:2px;right:2px">Music play</button>
+<script>
+var SERVER_URL = 'ws://plaatworld.herokuapp.com/';
+function rand (min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+
+var players = [], player_id, player_health, loaded = false, chats = [], CHAT_MAX, objects = [], PLAYER_WIDTH = 75, PLAYER_HEIGHT = 150;
+
+function resize () {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    CHAT_MAX = canvas.width > 768 ? 15 : 5;
+}
+resize();
+window.onresize = resize;
+
+var music_button = document.getElementById('music-button');
+var music = new Audio('https://data.bassiemusic.ml/plaatworld-music.m4a');
+music.volume = 0.5;
+music.loop = true;
+if (localStorage.getItem('music') != undefined) {
+    music.currentTime = localStorage.getItem('music');
+}
+var music_interval;
+music.ontimeupdate = function () {
+    localStorage.setItem('music', music.currentTime);
+}
+music_button.onclick = function () {
+    if (music.paused) {
+        music.play();
+        music_button.textContent = 'Music pause';
+    } else {
+        music.pause();
+        music_button.textContent = 'Music play';
+    }
+}
+
+var pepe = [ new Image(), new Image() ];
+pepe[0].src = '/pepe_l.png';
+pepe[1].src = '/pepe_r.png';
+
+var name_input = document.getElementById('name-input');
+if (localStorage.getItem('name') != undefined) {
+    name_input.value = localStorage.getItem('name');
+}
+name_input.oninput = function () {
+    localStorage.setItem('name', name_input.value);
+    players[player_id].name = name_input.value;
+    ws.send(JSON.stringify({ type: 'player_change', player_id: player_id, name: players[player_id].name }));
+};
+
+var chat_input = document.getElementById('chat-input');
+chat_input.onkeydown = function (event) {
+    if (event.keyCode == 13 && chat_input.value != '') {
+        if (chat_input.value.startsWith('/tp')) {
+            var parts = chat_input.value.split(/\s+/);
+            players[player_id].x = parseInt(parts[1]);
+            players[player_id].y = parseInt(parts[2]);
+            ws.send(JSON.stringify({ type: 'player_change', player_id: player_id, x: players[player_id].x, y: players[player_id].y }));
+        } else {
+            chats.push({ player_id: player_id, text: chat_input.value });
+            if (chats.length > CHAT_MAX) chats.shift();
+            new Audio('/chat.mp3').play();
+            ws.send(JSON.stringify({ type: 'player_chat', player_id: player_id, text: chat_input.value }));
+        }
+        chat_input.value = '';
+    }
+};
+
+var ws = new WebSocket(SERVER_URL);
+ws.onopen = function () {
+    ws.send(JSON.stringify({ type: 'player_new', name: name_input.value, x: [-100, 100][rand(0, 1)], y: 0, facing: 0, health: 100, max_health: 100, money: 0, max_attack: 5, speed: 5 }));
+};
+ws.onmessage = function (event) {
+    var message = JSON.parse(event.data);
+    if (message.type == 'player_id') {
+        player_id = message.player_id;
+    }
+    if (message.type == 'player_new') {
+        players[message.player_id] = { player_id: message.player_id, name: message.name, x: message.x, y: message.y, facing: message.facing, health: message.health, max_health: message.max_health, money: message.money, max_attack: message.max_attack, speed: message.speed };
+        new Audio('/spawn.mp3').play();
+        if (player_id == message.player_id) loaded = true, player_health = players[player_id].health;
+    }
+    if (message.type == 'player_change') {
+        if (message.name != undefined) players[message.player_id].name = message.name;
+        if (message.x != undefined) players[message.player_id].x = message.x;
+        if (message.y != undefined) players[message.player_id].y = message.y;
+        if (message.facing != undefined) players[message.player_id].facing = message.facing;
+        if (message.health != undefined) players[message.player_id].health = message.health;
+        if (message.max_health != undefined) players[message.player_id].max_health = message.max_health;
+        if (message.money != undefined) players[message.player_id].money = message.money;
+        if (message.max_attack != undefined) players[message.player_id].max_attack = message.max_attack;
+        if (message.speed != undefined) players[message.player_id].speed = message.speed;
+    }
+    if (message.type == 'player_remove') {
+        players[message.player_id] = undefined;
+    }
+    if (message.type == 'player_chat') {
+        chats.push({ player_id: message.player_id, text: message.text });
+        if (chats.length > CHAT_MAX) chats.shift();
+        if (loaded) new Audio('/chat.mp3').play();
+    }
+    if (message.type == 'object_new') {
+        var object = { x: message.x, y: message.y, width: message.width, height: message.height, image: new Image() };
+        object.image.src = message.url;
+        objects.push(object);
+    }
+};
+ws.onclose = function () {
+    alert('You died!');
+    window.location.reload();
+};
+
+var moveUp = false, moveLeft = false, moveRight = false, moveDown = false;
+window.onkeydown = function (event) {
+    if (event.keyCode == 37 || event.keyCode == 65) moveLeft = true;
+    if (event.keyCode == 38 || event.keyCode == 87) moveUp = true;
+    if (event.keyCode == 39 || event.keyCode == 68) moveRight = true;
+    if (event.keyCode == 40 || event.keyCode == 83) moveDown = true;
+};
+window.onkeyup = function () {
+    moveLeft = moveUp = moveRight = moveDown = false;
+};
+canvas.onclick = canvas.ontouchstart = function (event) {
+    for (var i = 0; i < players.length; i++) {
+        if (players[i] && i != player_id) {
+            if (
+                players[player_id].x > players[i].x - PLAYER_WIDTH/ 2 &&
+                players[player_id].y > players[i].y - PLAYER_HEIGHT &&
+                players[player_id].x < players[i].x + PLAYER_WIDTH / 2 &&
+                players[player_id].y < players[i].y + PLAYER_HEIGHT / 2
+            ) {
+                new Audio('/attack.mp3').play();
+                new Audio('/pain' + rand(1, 2) + '.mp3').play();
+                players[i].health -= rand(1, players[player_id].max_attack);
+                ws.send(JSON.stringify({ type: 'player_change', player_id: i, health: players[i].health }));
+                if (players[i].health <= 0) {
+                    players[player_id].money += players[i].money;
+                    players[i].money = 0;
+                    ws.send(JSON.stringify({ type: 'player_change', player_id: player_id, money: players[player_id].money }));
+                }
+            }
+        }
+    }
+};
+
+var EDGE = 50;
+function mobileMove (event) {
+    event.preventDefault();
+    moveLeft = event.touches[0].pageX < EDGE;
+    moveUp = event.touches[0].pageY < EDGE;
+    moveRight = event.touches[0].pageX > canvas.width - EDGE;
+    moveDown = event.touches[0].pageY > canvas.height - EDGE;
+};
+canvas.addEventListener('touchstart', mobileMove);
+canvas.addEventListener('touchmove', mobileMove);
+canvas.ontouchend = function (event) {
+    event.preventDefault();
+    moveLeft = moveUp = moveRight = moveDown = false;
+};
+
+var camera_x, camera_y;
+function update() {
+    if (players[player_id]) {
+        if (moveLeft) players[player_id].x -= players[player_id].speed, players[player_id].facing = 0;
+        if (moveUp) players[player_id].y -= players[player_id].speed;
+        if (moveRight) players[player_id].x += players[player_id].speed, players[player_id].facing = 1;
+        if (moveDown) players[player_id].y += players[player_id].speed;
+        if (moveLeft || moveUp || moveRight || moveDown) {
+            ws.send(JSON.stringify({ type: 'player_change', player_id: player_id, x: players[player_id].x, y: players[player_id].y, facing: players[player_id].facing }));
+        }
+        camera_x = players[player_id].x - canvas.width / 2;
+        camera_y = players[player_id].y - canvas.height / 2;
+        if (player_health > players[player_id].health) {
+            new Audio('/pain' + rand(1, 2) + '.mp3').play();
+            player_health = players[player_id].health;
+        }
+    }
+}
+
+function draw () {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (var i = 0; i < objects.length; i++) {
+        ctx.drawImage(objects[i].image, objects[i].x - camera_x - objects[i].width / 2, objects[i].y - camera_y - objects[i].height / 2, objects[i].width, objects[i].height);
+    }
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#000';
+    for (var i = 0; i < players.length; i++) {
+        if (players[i] && i != player_id) {
+            if (chats[chats.length - 1] && chats[chats.length - 1].player_id == i) {
+                ctx.fillText('"' + chats[chats.length - 1].text + '"', players[i].x - camera_x, players[i].y - camera_y - PLAYER_HEIGHT / 2 - 40);
+            }
+            ctx.fillText(players[i].name, players[i].x - camera_x, players[i].y - camera_y - PLAYER_HEIGHT / 2 - 24);
+            ctx.fillText(Math.max(players[i].health, 0) + ' / ' + players[i].max_health, players[i].x - camera_x, players[i].y - camera_y - PLAYER_HEIGHT / 2 - 8);
+            ctx.drawImage(pepe[players[i].facing], players[i].x - camera_x - PLAYER_WIDTH / 2, players[i].y - camera_y - PLAYER_HEIGHT / 2, PLAYER_WIDTH, PLAYER_HEIGHT);
+        }
+    }
+    if (players[player_id]) {
+        if (chats[chats.length - 1] && chats[chats.length - 1].player_id == player_id) {
+            ctx.fillText('"' + chats[chats.length - 1].text + '"', players[player_id].x - camera_x, players[player_id].y - camera_y - PLAYER_HEIGHT / 2 - 40);
+        }
+        ctx.fillText(players[player_id].name, players[player_id].x - camera_x, players[player_id].y - camera_y - PLAYER_HEIGHT / 2 - 24);
+        ctx.fillText(Math.max(players[player_id].health, 0) + ' / ' + players[player_id].max_health + ' | $' + players[player_id].money + ' | A' + players[player_id].max_attack + ' | S' + players[player_id].speed, players[player_id].x - camera_x, players[player_id].y - camera_y - PLAYER_HEIGHT / 2 - 8);
+        ctx.drawImage(pepe[players[player_id].facing], players[player_id].x - camera_x - PLAYER_WIDTH / 2, players[player_id].y - camera_y - PLAYER_HEIGHT / 2, PLAYER_WIDTH, PLAYER_HEIGHT);
+    }
+
+    ctx.textAlign = 'left';
+    var sorted_players = players.slice();
+    sorted_players.sort(function (a, b) { return b.money - a.money; });
+    for (var i = 0, s = 1; i < sorted_players.length; i++) {
+        if (sorted_players[i]) {
+            ctx.fillText(s + '. ' + sorted_players[i].name + ': $' + sorted_players[i].money, 4, s++ * 16 - 4);
+        }
+    }
+    for (var i = 0; i < chats.length; i++) {
+        var player_name = (players[chats[i].player_id] ? players[chats[i].player_id].name : (chats[i].player_id == -1 ? 'PlaatWorld' : 'Anonymous'));
+        ctx.fillText(player_name + ': ' + chats[i].text, 4, canvas.height - 18 - chats.length * 16 + i * 16);
+    }
+}
+
+function loop () {
+    update();
+    draw();
+    window.requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
